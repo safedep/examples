@@ -1,0 +1,20 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[[source]]
+url = "https://buf.build/gen/python"
+verify_ssl = true
+name = "buf"
+
+[packages]
+safedep-api-protocolbuffers-python = {version = "*", index = "buf"}
+safedep-api-protocolbuffers-pyi = {version = "*", index = "buf"}
+bufbuild-protovalidate-protocolbuffers-python = {version = "*", index = "buf"}
+bufbuild-protovalidate-protocolbuffers-pyi = {version = "*", index = "buf"}
+
+[dev-packages]
+
+[requires]
+python_version = "3.11"
