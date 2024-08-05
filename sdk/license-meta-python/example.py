@@ -30,8 +30,8 @@ def get_license_meta(id: str, name: str) -> license_meta_pb2.LicenseMeta:
 
     return license_meta
 
-def to_jsonl(license: license_meta_pb2.LicenseMeta) -> str:
-    return json.dumps(MessageToDict(license, preserving_proto_field_name=True))
+def to_json(license: license_meta_pb2.LicenseMeta) -> str:
+    return json.dumps(MessageToDict(license, preserving_proto_field_name=True), indent=2)
 
 if __name__ == '__main__':
     licenses = [
@@ -49,6 +49,9 @@ if __name__ == '__main__':
         }
     ]
 
+    license_meta_list = license_meta_pb2.LicenseMetaList()
     for license in licenses:
         license_meta = get_license_meta(license['id'], license['name'])
-        print(to_jsonl(license_meta))
+        license_meta_list.licenses.append(license_meta)
+
+    print(to_json(license_meta_list))

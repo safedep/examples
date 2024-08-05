@@ -56,19 +56,19 @@
         },
         "safedep-api-protocolbuffers-pyi": {
             "hashes": [
-                "sha256:5a28dc78d61111d99797af3bfd3208be6619bb9c0939a7e01a28d88bcf81d740"
+                "sha256:fbcf5ebd991af620fd970b57a58ffc4620be02730511bbd5cb85bb8a10472a58"
             ],
             "index": "buf",
             "markers": "python_version >= '3.8'",
-            "version": "==27.3.0.1.20240804113006+faad5035157d"
+            "version": "==27.3.0.1.20240805032728+8436e7acdffe"
         },
         "safedep-api-protocolbuffers-python": {
             "hashes": [
-                "sha256:8096037df9f40ed3c8d50c02d395dfdbfcb1309f71d8cfab23efd6f071bb2631"
+                "sha256:74ae7fb99c9d794943e5d8d8a2571915c23ff21738ee15e6f179c7bc85accd13"
             ],
             "index": "buf",
             "markers": "python_version >= '3.8'",
-            "version": "==27.3.0.1.20240804113006+faad5035157d"
+            "version": "==27.3.0.1.20240805032728+8436e7acdffe"
         },
         "types-protobuf": {
             "hashes": [
