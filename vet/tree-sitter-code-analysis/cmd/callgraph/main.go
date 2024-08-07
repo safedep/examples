@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
@@ -134,7 +135,7 @@ type AssignmentGraphBuilder struct {
 
 	// Assignment graph holding object to object mapping, modelling the
 	// assignment relationship between them
-	assignmentGraph map[string]string
+	assignmentGraph map[string][]string
 
 	// The current namespace
 	currentNamespace *namespace
@@ -144,7 +145,7 @@ func newAssignmentGraphBuilder(ns *namespace) *AssignmentGraphBuilder {
 	return &AssignmentGraphBuilder{
 		definitionsRegistry: make(map[string]*definition),
 		classHierarchy:      make(map[string][]string),
-		assignmentGraph:     make(map[string]string),
+		assignmentGraph:     make(map[string][]string),
 		scope:               newScope(nil, nil),
 		currentNamespace:    ns,
 	}
@@ -191,6 +192,14 @@ func (b *AssignmentGraphBuilder) newScope(def *definition, fn func()) {
 
 	// Restore the scope
 	b.scope = old
+}
+
+func (b *AssignmentGraphBuilder) assignmentEdge(from, to *definition) {
+	if _, ok := b.assignmentGraph[from.id()]; !ok {
+		b.assignmentGraph[from.id()] = make([]string, 0)
+	}
+
+	b.assignmentGraph[from.id()] = append(b.assignmentGraph[from.id()], to.id())
 }
 
 // Find in scope by name (binding)
@@ -323,9 +332,29 @@ func (b *AssignmentGraphBuilder) visitFunctionDefinition(v *Visitor, node *sitte
 	return funcDef, err
 }
 
+func (b *AssignmentGraphBuilder) visitReturnStatement(v *Visitor, node *sitter.Node) (*definition, error) {
+	fmt.Printf("Visiting return statement with child count: %d\n", node.ChildCount())
+
+	// https://github.com/tree-sitter/tree-sitter-python/blob/master/grammar.js#L235
+	if node.ChildCount() > 1 {
+		expr := node.Child(1)
+		exprDef, err := b.eval(v, expr)
+
+		if err != nil {
+			return nil, err
+		}
+
+		retDef := b.newDefinition(idTypeVariable, "__ret")
+		b.assignmentEdge(retDef, exprDef)
+
+		return retDef, nil
+	}
+
+	return b.newDefinition(idTypeUnknown, "nil_return"), nil
+}
+
 func (b *AssignmentGraphBuilder) visitCall(v *Visitor, node *sitter.Node) (*definition, error) {
 	name := node.ChildByFieldName("function")
-
 	if name == nil {
 		return nil, fmt.Errorf("Invalid call")
 	}
@@ -338,10 +367,58 @@ func (b *AssignmentGraphBuilder) visitCall(v *Visitor, node *sitter.Node) (*defi
 
 	// Lookup callee in scope
 	if calleeDef, ok := b.findAttributedNameInScope(calleeName); ok {
-		return calleeDef, nil
+		var retDef *definition = b.newDefinition(idTypeUnknown, fmt.Sprintf("__call_%s_ret", calleeName))
+
+		fmt.Printf("Found callee: %s\n", calleeDef.id())
+
+		// If the callee is a class constructor, we need to resolve the
+		// __init__ method
+		if calleeDef.idType == idTypeClass {
+			fmt.Printf("Callee is a class constructor\n")
+
+			// TODO: Resolve __init__ method in class hierarchy
+
+			b.switchScope(calleeDef.scope, func() {
+				if initDef, ok := b.findInScope("__init__"); ok {
+					calleeDef = initDef
+					retDef = initDef
+				} else {
+					calleeDef = b.newDefinition(idTypeUnknown, fmt.Sprintf("__class_init_%s", calleeName))
+					retDef = calleeDef
+				}
+			})
+		}
+
+		args := node.ChildByFieldName("arguments")
+		if (args != nil) && (args.ChildCount() > 0) {
+			// Check if args is of type argument_list
+			if args.Child(0).Type() == "argument_list" {
+				// Skip the ( and ) nodes
+				for i := 1; i < int(args.ChildCount()-1); i++ {
+					arg := args.Child(i)
+					argDef, err := b.eval(v, arg)
+					if err != nil {
+						return nil, err
+					}
+
+					b.assignmentEdge(calleeDef, argDef)
+
+					// Skip the "," node
+					i++
+				}
+			}
+		}
+
+		b.switchScope(calleeDef.scope, func() {
+			if r, ok := b.findInScope("__ret"); ok {
+				retDef = r
+			}
+		})
+
+		return retDef, nil
 	}
 
-	return b.newDefinition(idTypeUnknown, v.val(name)), nil
+	return b.newDefinition(idTypeUnknown, fmt.Sprintf("__call_%s", calleeName)), nil
 }
 
 func (b *AssignmentGraphBuilder) visitAssignment(v *Visitor, node *sitter.Node) (*definition, error) {
@@ -365,7 +442,7 @@ func (b *AssignmentGraphBuilder) visitAssignment(v *Visitor, node *sitter.Node) 
 	fmt.Printf("left: %v right: %v\n", leftDef, rightDef)
 
 	// Add assignment to graph
-	b.assignmentGraph[leftDef.id()] = rightDef.id()
+	b.assignmentEdge(leftDef, rightDef)
 
 	return leftDef, nil
 }
@@ -385,6 +462,10 @@ func (b *AssignmentGraphBuilder) visitExpressionStatement(v *Visitor, node *sitt
 		}
 	}
 
+	if def == nil {
+		return b.newDefinition(idTypeUnknown, "nil_expression"), nil
+	}
+
 	return def, err
 }
 
@@ -396,6 +477,33 @@ func (b *AssignmentGraphBuilder) visitIdentifier(v *Visitor, node *sitter.Node) 
 func (b *AssignmentGraphBuilder) visitAttributeExpression(_ *Visitor, _ *sitter.Node) (*definition, error) {
 	fmt.Printf("Visiting attribute expression\n")
 	return b.newDefinition(idTypeUnknown, "attribute"), nil
+}
+
+func (b *AssignmentGraphBuilder) visitList(v *Visitor, node *sitter.Node) (*definition, error) {
+	if node.ChildCount() < 2 {
+		return nil, fmt.Errorf("Invalid list")
+	}
+
+	for i := 1; i < int(node.ChildCount()-1); i++ {
+		_, err := b.eval(v, node.Child(i))
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return b.newDefinition(idTypeUnknown, "list"), nil
+}
+
+// Module definition, identifies the root node of the AST
+func (b *AssignmentGraphBuilder) visitModule(v *Visitor, node *sitter.Node) (*definition, error) {
+	for i := 0; i < int(node.ChildCount()); i++ {
+		_, err := b.eval(v, node.Child(i))
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return b.newDefinition(idTypeModule, "module"), nil
 }
 
 type Visitor struct {
@@ -437,16 +545,39 @@ func (v *Visitor) visit(node *sitter.Node) (*definition, error) {
 		return v.builder.visitLiteral(v, node)
 	case "attribute":
 		return v.builder.visitAttributeExpression(v, node)
+	case "return_statement":
+		return v.builder.visitReturnStatement(v, node)
+	case "module":
+		return v.builder.visitModule(v, node)
+	case "list":
+		return v.builder.visitList(v, node)
 	default:
 		fmt.Printf("Visiting node: %s\n", node.Type())
 
+		var err error
+		var def *definition = v.builder.newDefinition(idTypeUnknown, node.Type())
+
 		// Recursively visit children without evaluation
+		// We will return the last evaluated value
 		for i := 0; i < int(node.ChildCount()); i++ {
-			_, _ = v.visit(node.Child(i))
+			def, err = v.visit(node.Child(i))
 		}
+
+		return def, err
+	}
+}
+
+// Convert file path to module name.
+// Example samples/4.py to samples.4
+func fileToModuleName(file string) string {
+	name := filepath.Clean(file)
+	name = strings.ReplaceAll(file, "/", ".")
+
+	if strings.HasSuffix(name, ".py") {
+		name = name[:len(name)-3]
 	}
 
-	return nil, fmt.Errorf("No evaluation for node type: %s", node.Type())
+	return name
 }
 
 func main() {
@@ -458,35 +589,48 @@ func main() {
 	parser := sitter.NewParser()
 	parser.SetLanguage(python.GetLanguage())
 
-	file, err := os.Open(os.Args[1])
+	programDef := newDefinition(nil, idTypeModule, fileToModuleName(os.Args[1]))
+	programNs := newNamespace(programDef, nil, nil)
+
+	builder := newAssignmentGraphBuilder(programNs)
+
+	loadModule := func(path string, builder *AssignmentGraphBuilder) error {
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+
+		defer file.Close()
+
+		fileContent, err := io.ReadAll(file)
+		if err != nil {
+			return err
+		}
+
+		cst, err := parser.ParseCtx(context.Background(), nil, fileContent)
+		if err != nil {
+			return err
+		}
+
+		if cst.RootNode() == nil {
+			return fmt.Errorf("Error parsing file: root node is nil")
+		}
+
+		visitor := newVisitor(fileContent, builder)
+
+		_, err = visitor.visit(cst.RootNode())
+		if err != nil {
+			return err
+		}
+
+		return nil
+	}
+
+	err := loadModule(os.Args[1], builder)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error opening file: %s\n", err)
+		fmt.Fprintf(os.Stderr, "Error loading module: %s\n", err)
 		os.Exit(1)
 	}
-
-	defer file.Close()
-
-	fileContent, err := io.ReadAll(file)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error reading file: %s\n", err)
-		os.Exit(1)
-	}
-
-	cst, err := parser.ParseCtx(context.Background(), nil, fileContent)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error parsing file: %s\n", err)
-		os.Exit(1)
-	}
-
-	if cst.RootNode() == nil {
-		fmt.Fprintf(os.Stderr, "Error parsing file: root node is nil\n")
-		os.Exit(1)
-	}
-
-	builder := newAssignmentGraphBuilder(newNamespace(newDefinition(nil, idTypeModule, "program"), nil, nil))
-
-	visitor := newVisitor(fileContent, builder)
-	visitor.visit(cst.RootNode())
 
 	fmt.Printf("Assignment Graph:\n")
 
