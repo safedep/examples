@@ -15,6 +15,13 @@ Install dependencies
 npm install
 ```
 
+Set credentials
+
+```shell
+export SAFEDEP_API_KEY=your-api-key
+export SAFEDEP_TENANT_ID=your-tenant-id
+```
+
 Run the example
 
 ```shell
