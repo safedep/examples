@@ -25,7 +25,7 @@ export SAFEDEP_TENANT_ID=your-tenant-id
 Run the example
 
 ```shell
-npx ts-node index.ts
+npx ts-node --esm index.ts
 ```
 
 ## Reference
