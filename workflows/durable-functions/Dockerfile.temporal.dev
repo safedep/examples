@@ -1,0 +1,8 @@
+FROM ubuntu:latest
+
+WORKDIR /temporal
+
+ADD https://github.com/temporalio/cli/releases/download/v1.1.1/temporal_cli_1.1.1_linux_amd64.tar.gz /temporal
+RUN tar -xvzf temporal_cli_1.1.1_linux_amd64.tar.gz
+
+ENTRYPOINT ["/temporal/temporal"]
